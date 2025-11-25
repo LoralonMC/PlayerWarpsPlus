@@ -1,0 +1,21 @@
+name: PlayerWarpsPlus
+version: '1.0.0'
+main: dev.oakheart.playerwarpsplus.PlayerWarpsPlus
+api-version: '1.21'
+authors: [ Loralon ]
+depend: [ PlayerWarps ]
+description: Adds cinematic countdown and transition effects to PlayerWarps teleportation
+
+commands:
+  playerwarpsplus:
+    description: Reload PlayerWarpsPlus configuration
+    usage: /playerwarpsplus reload
+    aliases: [ pwplus, pwp ]
+
+permissions:
+  playerwarpsplus.reload:
+    description: Allows reloading the PlayerWarpsPlus config
+    default: op
+  playerwarpsplus.bypass:
+    description: Bypass countdown and teleport instantly
+    default: op
