@@ -1,5 +1,5 @@
 name: PlayerWarpsPlus
-version: '1.0.0'
+version: '${version}'
 main: dev.oakheart.playerwarpsplus.PlayerWarpsPlus
 api-version: '1.21'
 authors: [ Loralon ]

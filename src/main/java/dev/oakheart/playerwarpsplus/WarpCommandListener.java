@@ -1,6 +1,8 @@
 package dev.oakheart.playerwarpsplus;
 
+import com.olziedev.playerwarps.api.PlayerWarpsAPI;
 import com.olziedev.playerwarps.api.events.warp.PlayerWarpTeleportEvent;
+import com.olziedev.playerwarps.api.player.WPlayer;
 import dev.oakheart.playerwarpsplus.util.MessageFormatter;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -100,14 +102,15 @@ public class WarpCommandListener implements Listener {
             return; // Let the event proceed normally
         }
 
-        // Otherwise, cancel the immediate teleport and start our countdown
-        event.setCancelled(true);
-
-        // Validate and extract warp data
+        // Validate and extract warp data BEFORE cancelling the event
+        // This allows PlayerWarps to handle unsafe locations with its own message
         WarpData warpData = validateAndExtractWarpData(event, player);
         if (warpData == null) {
-            return; // Validation failed, error already logged
+            return; // Validation failed or unsafe location - let PlayerWarps handle it
         }
+
+        // Cancel the immediate teleport and start our countdown
+        event.setCancelled(true);
 
         // Start the countdown sequence
         startCountdown(player, warpData);
@@ -432,33 +435,49 @@ public class WarpCommandListener implements Listener {
                 waitingPlayers.remove(uuid);
                 transitioningPlayers.remove(uuid);
                 playerCountdownTasks.remove(uuid);
-                playerOriginalLocations.remove(uuid);
 
-                // Mark player as post-countdown so next warp event will proceed
-                postCountdownPlayers.add(uuid);
+                // Get the original location before the bat zoom started
+                // We'll teleport the player here first so /back plugins record this as the "previous location"
+                Location originalLocation = playerOriginalLocations.remove(uuid);
 
-                // Execute the warp command while player is still on the bat
-                // The bat will teleport with the player, creating a seamless transition
-                String warpCommand = plugin.getConfig().getString("warp-command", "pw");
-                player.performCommand(warpCommand + " " + warpData.warpName);
+                // Remove player from bat and despawn it BEFORE teleporting
+                Bat bat = playerBats.remove(uuid);
+                if (bat != null && bat.isValid()) {
+                    bat.removePassenger(player);
+                    bat.remove();
+                }
 
-                // Clean up bat and effects after teleport completes
+                // Teleport player back to original ground location first
+                // This ensures /back plugins (Essentials, CMI, etc.) record this as the "last location"
+                // instead of the mid-air bat position
+                if (originalLocation != null) {
+                    player.teleport(originalLocation);
+                }
+
+                // Now perform the actual warp teleport (on next tick to ensure location is registered)
+                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                    if (!player.isOnline()) return;
+
+                    // Use PlayerWarps API to teleport directly, bypassing the safety confirmation
+                    // This preserves the original event context so PlayerWarps knows the player already confirmed
+                    WPlayer warpPlayer = PlayerWarpsAPI.getInstance().getWarpPlayer(uuid);
+                    if (warpPlayer != null && warpData.originalEvent.getPlayerWarp() != null) {
+                        warpData.originalEvent.getPlayerWarp().getWarpLocation()
+                                .teleportLocation(player, warpPlayer, warpData.originalEvent);
+                    } else {
+                        // Fallback to command if API fails (shouldn't happen normally)
+                        postCountdownPlayers.add(uuid);
+                        String warpCommand = plugin.getConfig().getString("warp-command", "pw");
+                        player.performCommand(warpCommand + " " + warpData.warpName);
+                    }
+                }, 1L);
+
+                // Clean up effects after teleport completes
                 Bukkit.getScheduler().runTaskLater(plugin, () -> {
                     if (player.isOnline()) {
-                        // Remove player from bat and despawn it
-                        Bat bat = playerBats.remove(uuid);
-                        if (bat != null && bat.isValid()) {
-                            bat.removePassenger(player);
-                            bat.remove();
-                        }
-
-                        // Remove invisibility and speed effects after a few more ticks to ensure bat is fully despawned
-                        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-                            if (player.isOnline()) {
-                                player.removePotionEffect(PotionEffectType.INVISIBILITY);
-                                player.removePotionEffect(PotionEffectType.SPEED);
-                            }
-                        }, 10L);
+                        // Remove invisibility and speed effects
+                        player.removePotionEffect(PotionEffectType.INVISIBILITY);
+                        player.removePotionEffect(PotionEffectType.SPEED);
 
                         // Optionally play arrival sound at destination
                         if (plugin.getConfig().getBoolean("countdown.arrival-sound.enabled", false)) {
@@ -467,12 +486,6 @@ public class WarpCommandListener implements Listener {
                                     playArrivalSound(player);
                                 }
                             }, 8L);
-                        }
-                    } else {
-                        // Player went offline, clean up the bat anyway
-                        Bat bat = playerBats.remove(uuid);
-                        if (bat != null && bat.isValid()) {
-                            bat.remove();
                         }
                     }
                 }, PRE_TELEPORT_DELAY_TICKS);
