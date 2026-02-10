@@ -34,6 +34,7 @@
 # Custom Tags:
 #   <smallcaps>text</smallcaps> - Converts to small caps (ᴛᴇxᴛ)
 #   <sc>text</sc> - Short alias for smallcaps
+#   Nesting works: <sc><bold>text</bold></sc> applies both bold and small caps
 #
 # ========================================
 

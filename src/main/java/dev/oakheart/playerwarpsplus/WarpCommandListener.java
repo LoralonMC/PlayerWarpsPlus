@@ -12,8 +12,11 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.entity.EntityMountEvent;
+import org.bukkit.permissions.PermissionAttachment;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
@@ -22,6 +25,7 @@ import net.kyori.adventure.text.Component;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Handles PlayerWarps warp events and provides countdown functionality
@@ -57,6 +61,7 @@ public class WarpCommandListener implements Listener {
     private final Map<UUID, Bat> playerBats = new ConcurrentHashMap<>();
     private final Map<UUID, Location> playerOriginalLocations = new ConcurrentHashMap<>(); // Store original location for disconnect safety
     private final Set<UUID> postCountdownPlayers = ConcurrentHashMap.newKeySet(); // Players who completed countdown, bypass interception
+    private final Map<UUID, Location> pendingRestoreLocations = new ConcurrentHashMap<>(); // Safety: restore location on rejoin if quit-time teleport fails
 
     /**
      * Simple data holder for warp information
@@ -100,6 +105,11 @@ public class WarpCommandListener implements Listener {
                 plugin.getLogger().info(player.getName() + " completed countdown, allowing warp to proceed");
             }
             return; // Let the event proceed normally
+        }
+
+        // Prevent re-entrancy - if player is already in a countdown, cancel the old one first
+        if (waitingPlayers.contains(uuid)) {
+            cancelCountdown(player);
         }
 
         // Validate and extract warp data BEFORE cancelling the event
@@ -312,7 +322,23 @@ public class WarpCommandListener implements Listener {
                 bat.setAwake(true);
 
                 playerBats.put(uuid, bat);
+
+                // Temporarily grant WorldGuard bypass to prevent "can't ride that here" denial.
+                // This is fully synchronous — addPassenger fires EntityMountEvent on the same tick,
+                // so the bypass is removed before any other game logic can use it.
+                PermissionAttachment wgBypass = null;
+                if (Bukkit.getPluginManager().getPlugin("WorldGuard") != null) {
+                    wgBypass = player.addAttachment(plugin);
+                    wgBypass.setPermission("worldguard.region.bypass." + player.getWorld().getName(), true);
+                    player.recalculatePermissions();
+                }
+
                 bat.addPassenger(player);
+
+                if (wgBypass != null) {
+                    wgBypass.remove();
+                    player.recalculatePermissions();
+                }
 
                 // Apply speed effect to widen FOV during zoom
                 int speedAmplifier = getValidatedInt("countdown.zoom-speed-amplifier", 4, 0, 10);
@@ -458,18 +484,23 @@ public class WarpCommandListener implements Listener {
                 Bukkit.getScheduler().runTaskLater(plugin, () -> {
                     if (!player.isOnline()) return;
 
-                    // Use PlayerWarps API to teleport directly, bypassing the safety confirmation
-                    // This preserves the original event context so PlayerWarps knows the player already confirmed
+                    // Mark player as post-countdown so if the teleport triggers a new event, it passes through
+                    postCountdownPlayers.add(uuid);
+
+                    // Use PlayerWarps API to teleport directly
                     WPlayer warpPlayer = PlayerWarpsAPI.getInstance().getWarpPlayer(uuid);
                     if (warpPlayer != null && warpData.originalEvent.getPlayerWarp() != null) {
                         warpData.originalEvent.getPlayerWarp().getWarpLocation()
                                 .teleportLocation(player, warpPlayer, warpData.originalEvent);
                     } else {
                         // Fallback to command if API fails (shouldn't happen normally)
-                        postCountdownPlayers.add(uuid);
                         String warpCommand = plugin.getConfig().getString("warp-command", "pw");
                         player.performCommand(warpCommand + " " + warpData.warpName);
                     }
+
+                    // Clean up post-countdown flag after a short delay in case the API
+                    // teleported directly without firing a new event
+                    Bukkit.getScheduler().runTaskLater(plugin, () -> postCountdownPlayers.remove(uuid), 5L);
                 }, 1L);
 
                 // Clean up effects after teleport completes
@@ -551,6 +582,24 @@ public class WarpCommandListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onEntityMount(EntityMountEvent event) {
+        // Allow mounting our tracked bats even if another plugin (e.g. WorldGuard) blocks it
+        if (!(event.getEntity() instanceof Player player)) return;
+
+        UUID uuid = player.getUniqueId();
+        Bat bat = playerBats.get(uuid);
+
+        if (bat != null && event.getMount().equals(bat)) {
+            if (event.isCancelled()) {
+                event.setCancelled(false);
+                if (plugin.getConfig().getBoolean("debug", false)) {
+                    plugin.getLogger().info("Allowed bat mount for " + player.getName() + " (was blocked by another plugin)");
+                }
+            }
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerQuit(PlayerQuitEvent event) {
         // Clean up countdown tasks for disconnecting players
@@ -563,6 +612,8 @@ public class WarpCommandListener implements Listener {
             Location originalLocation = playerOriginalLocations.get(uuid);
             if (originalLocation != null && transitioningPlayers.contains(uuid)) {
                 player.teleport(originalLocation);
+                // Also store as pending restore in case the quit-time teleport doesn't persist
+                pendingRestoreLocations.put(uuid, originalLocation);
                 if (plugin.getConfig().getBoolean("debug", false)) {
                     plugin.getLogger().info("Teleported " + player.getName() + " back to original location on disconnect");
                 }
@@ -573,6 +624,23 @@ public class WarpCommandListener implements Listener {
             if (plugin.getConfig().getBoolean("debug", false)) {
                 plugin.getLogger().info("Cleaned up countdown tasks for disconnecting player: " + player.getName());
             }
+        }
+    }
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        UUID uuid = event.getPlayer().getUniqueId();
+        Location restoreLocation = pendingRestoreLocations.remove(uuid);
+        if (restoreLocation != null) {
+            // Delay by 1 tick to ensure the player is fully loaded
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (event.getPlayer().isOnline()) {
+                    event.getPlayer().teleport(restoreLocation);
+                    if (plugin.getConfig().getBoolean("debug", false)) {
+                        plugin.getLogger().info("Restored " + event.getPlayer().getName() + " to pre-zoom location on rejoin");
+                    }
+                }
+            }, 1L);
         }
     }
 
@@ -801,7 +869,7 @@ public class WarpCommandListener implements Listener {
      */
     public void cleanupOrphanedBats() {
         // Count and remove orphaned bats
-        final int[] removed = {0};
+        AtomicInteger removed = new AtomicInteger(0);
         playerBats.entrySet().removeIf(entry -> {
             Bat bat = entry.getValue();
             if (bat == null || !bat.isValid() || bat.getPassengers().isEmpty()) {
@@ -809,14 +877,14 @@ public class WarpCommandListener implements Listener {
                 if (bat != null && bat.isValid()) {
                     bat.remove();
                 }
-                removed[0]++;
+                removed.incrementAndGet();
                 return true; // Remove from map
             }
             return false; // Keep in map
         });
 
-        if (removed[0] > 0 && plugin.getConfig().getBoolean("debug", false)) {
-            plugin.getLogger().info("Cleaned up " + removed[0] + " orphaned bat(s)");
+        if (removed.get() > 0 && plugin.getConfig().getBoolean("debug", false)) {
+            plugin.getLogger().info("Cleaned up " + removed.get() + " orphaned bat(s)");
         }
     }
 
@@ -837,6 +905,7 @@ public class WarpCommandListener implements Listener {
         transitioningPlayers.clear();
         postCountdownPlayers.clear();
         playerOriginalLocations.clear();
+        pendingRestoreLocations.clear();
 
         // Clean up any remaining bats
         playerBats.values().forEach(bat -> {

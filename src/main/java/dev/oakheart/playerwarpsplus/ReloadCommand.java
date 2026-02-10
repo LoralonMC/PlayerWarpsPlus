@@ -38,14 +38,15 @@ public class ReloadCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        // Check if "reload" subcommand was provided
-        if (args.length == 0 || !args[0].equalsIgnoreCase("reload")) {
-            sender.sendMessage(Component.text("Usage: /" + label + " reload", NamedTextColor.RED));
+        // Check permission first to avoid leaking command structure
+        if (!sender.hasPermission("playerwarpsplus.reload")) {
+            sender.sendMessage(Component.text("You don't have permission to use this command.", NamedTextColor.RED));
             return true;
         }
 
-        if (!sender.hasPermission("playerwarpsplus.reload")) {
-            sender.sendMessage(Component.text("You don't have permission to reload PlayerWarpsPlus.", NamedTextColor.RED));
+        // Check if "reload" subcommand was provided
+        if (args.length == 0 || !args[0].equalsIgnoreCase("reload")) {
+            sender.sendMessage(Component.text("Usage: /" + label + " reload", NamedTextColor.RED));
             return true;
         }
 

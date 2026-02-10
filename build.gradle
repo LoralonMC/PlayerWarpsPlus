@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'dev.oakheart'
-version = '1.0.1'
+version = '1.0.2'
 
 repositories {
     mavenCentral()
@@ -16,16 +16,11 @@ repositories {
         name = "olziedev-repo"
         url = "https://repo.olziedev.com/"
     }
-    maven {
-        name = "codemc-repo"
-        url = "https://repo.codemc.io/repository/maven-releases/"
-    }
 }
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.8-R0.1-SNAPSHOT")
     compileOnly("com.olziedev:playerwarps-api:7.9.0")
-    compileOnly("com.github.retrooper:packetevents-spigot:2.10.1")
 
     // MiniMessage for modern text formatting (already included in Paper API, but explicit for clarity)
     compileOnly("net.kyori:adventure-api:4.17.0")

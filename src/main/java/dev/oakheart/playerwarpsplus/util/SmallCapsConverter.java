@@ -31,6 +31,8 @@ import java.util.Map;
  */
 public class SmallCapsConverter {
 
+    private SmallCapsConverter() {}
+
     private static final Map<Character, Character> SMALL_CAPS_MAP = new HashMap<>();
 
     static {

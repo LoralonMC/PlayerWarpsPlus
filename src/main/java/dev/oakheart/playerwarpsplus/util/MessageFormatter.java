@@ -2,8 +2,6 @@ package dev.oakheart.playerwarpsplus.util;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.minimessage.tag.Tag;
-import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import net.kyori.adventure.title.Title;
 import org.bukkit.entity.Player;
 
@@ -38,8 +36,10 @@ import java.util.regex.Pattern;
  */
 public class MessageFormatter {
 
-    private static final Pattern SMALLCAPS_PATTERN = Pattern.compile("<(smallcaps|sc)>([^<]*)</\\1>");
+    private static final Pattern SMALLCAPS_PATTERN = Pattern.compile("<(smallcaps|sc)>(.*?)</\\1>");
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
+
+    private MessageFormatter() {}
 
     /**
      * Format a message with placeholders
@@ -59,6 +59,9 @@ public class MessageFormatter {
             warpName = "Unknown";
         }
 
+        // Escape warp name to prevent MiniMessage tag injection
+        warpName = MINI_MESSAGE.escapeTags(warpName);
+
         // Replace placeholders with %placeholder% syntax
         String processed = message
                 .replace("%warp%", warpName)
@@ -76,19 +79,58 @@ public class MessageFormatter {
     }
 
     /**
-     * Process <smallcaps>text</smallcaps> and <sc>text</sc> tags
+     * Process <smallcaps>text</smallcaps> and <sc>text</sc> tags.
+     * Converts only the text portions to small caps while preserving any
+     * nested MiniMessage tags (e.g. {@code <sc><bold>text</bold></sc>} works).
      */
     private static String processSmallCapsTags(String message) {
         Matcher matcher = SMALLCAPS_PATTERN.matcher(message);
         StringBuilder result = new StringBuilder();
 
         while (matcher.find()) {
-            String textToConvert = matcher.group(2);
-            String converted = SmallCapsConverter.convert(textToConvert);
+            String innerContent = matcher.group(2);
+            String converted = convertTextPreservingTags(innerContent);
             matcher.appendReplacement(result, Matcher.quoteReplacement(converted));
         }
 
         matcher.appendTail(result);
+        return result.toString();
+    }
+
+    /**
+     * Converts text to small caps while preserving MiniMessage tags.
+     * Characters inside angle brackets are left untouched.
+     */
+    private static String convertTextPreservingTags(String content) {
+        StringBuilder result = new StringBuilder();
+        StringBuilder textBuffer = new StringBuilder();
+        boolean inTag = false;
+
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (c == '<') {
+                // Flush accumulated text as small caps
+                if (textBuffer.length() > 0) {
+                    result.append(SmallCapsConverter.convert(textBuffer.toString()));
+                    textBuffer.setLength(0);
+                }
+                inTag = true;
+                result.append(c);
+            } else if (c == '>' && inTag) {
+                inTag = false;
+                result.append(c);
+            } else if (inTag) {
+                result.append(c);
+            } else {
+                textBuffer.append(c);
+            }
+        }
+
+        // Flush any remaining text
+        if (textBuffer.length() > 0) {
+            result.append(SmallCapsConverter.convert(textBuffer.toString()));
+        }
+
         return result.toString();
     }
 
