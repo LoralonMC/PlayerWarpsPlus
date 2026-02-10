@@ -46,8 +46,12 @@ public final class PlayerWarpsPlus extends JavaPlugin {
 
         // Register reload command
         ReloadCommand reloadCommand = new ReloadCommand(this);
-        getCommand("playerwarpsplus").setExecutor(reloadCommand);
-        getCommand("playerwarpsplus").setTabCompleter(reloadCommand);
+        if (getCommand("playerwarpsplus") != null) {
+            getCommand("playerwarpsplus").setExecutor(reloadCommand);
+            getCommand("playerwarpsplus").setTabCompleter(reloadCommand);
+        } else {
+            getLogger().severe("Failed to register 'playerwarpsplus' command - is it defined in plugin.yml?");
+        }
 
         // Start periodic cleanup task to remove orphaned bats
         long cleanupInterval = getConfig().getLong("bat-cleanup-interval", 100L);

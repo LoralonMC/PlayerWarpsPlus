@@ -7,7 +7,6 @@ import dev.oakheart.playerwarpsplus.util.MessageFormatter;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Bat;
-import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -15,6 +14,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.permissions.PermissionAttachment;
 import org.bukkit.potion.PotionEffect;
@@ -25,7 +25,7 @@ import net.kyori.adventure.text.Component;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 
 /**
  * Handles PlayerWarps warp events and provides countdown functionality
@@ -215,8 +215,7 @@ public class WarpCommandListener implements Listener {
                     if (!waitingPlayers.contains(uuid)) return;
                     handleCountdownMessage(player, warpData.warpName, secondsLeft);
                 } catch (Exception e) {
-                    plugin.getLogger().severe("Error in countdown message task for " + player.getName() + ": " + e.getMessage());
-                    e.printStackTrace();
+                    plugin.getLogger().log(Level.SEVERE, "Error in countdown message task for " + player.getName(), e);
                     cancelCountdown(player);
                 }
             }, delay);
@@ -253,8 +252,7 @@ public class WarpCommandListener implements Listener {
                     plugin.getLogger().info("Applied darkness/blindness early for " + player.getName());
                 }
             } catch (Exception e) {
-                plugin.getLogger().severe("Error in darkness task for " + player.getName() + ": " + e.getMessage());
-                e.printStackTrace();
+                plugin.getLogger().log(Level.SEVERE, "Error in darkness task for " + player.getName(), e);
                 cancelCountdown(player);
             }
         }, darknessDelay);
@@ -278,8 +276,7 @@ public class WarpCommandListener implements Listener {
                     plugin.getLogger().info("Applied invisibility for " + player.getName());
                 }
             } catch (Exception e) {
-                plugin.getLogger().severe("Error in invisibility task for " + player.getName() + ": " + e.getMessage());
-                e.printStackTrace();
+                plugin.getLogger().log(Level.SEVERE, "Error in invisibility task for " + player.getName(), e);
                 cancelCountdown(player);
             }
         }, invisDelay);
@@ -378,8 +375,7 @@ public class WarpCommandListener implements Listener {
                                 io.papermc.paper.entity.TeleportFlag.EntityState.RETAIN_PASSENGERS);
                         player.sendActionBar(Component.empty());
                     } catch (Exception e) {
-                        plugin.getLogger().severe("Error in bat movement task for " + player.getName() + ": " + e.getMessage());
-                        e.printStackTrace();
+                        plugin.getLogger().log(Level.SEVERE, "Error in bat movement task for " + player.getName(), e);
                         if (moveTask[0] != null) {
                             moveTask[0].cancel();
                         }
@@ -397,8 +393,7 @@ public class WarpCommandListener implements Listener {
                     plugin.getLogger().info("Player " + player.getName() + " is now riding invisible bat");
                 }
             } catch (Exception e) {
-                plugin.getLogger().severe("Error in zoom task for " + player.getName() + ": " + e.getMessage());
-                e.printStackTrace();
+                plugin.getLogger().log(Level.SEVERE, "Error in zoom task for " + player.getName(), e);
                 cancelCountdown(player);
             }
         }, zoomDelay);
@@ -430,8 +425,7 @@ public class WarpCommandListener implements Listener {
                     plugin.getLogger().info("Showing final message for " + player.getName());
                 }
             } catch (Exception e) {
-                plugin.getLogger().severe("Error in final message task for " + player.getName() + ": " + e.getMessage());
-                e.printStackTrace();
+                plugin.getLogger().log(Level.SEVERE, "Error in final message task for " + player.getName(), e);
                 cancelCountdown(player);
             }
         }, blackDelay);
@@ -488,12 +482,24 @@ public class WarpCommandListener implements Listener {
                     postCountdownPlayers.add(uuid);
 
                     // Use PlayerWarps API to teleport directly
-                    WPlayer warpPlayer = PlayerWarpsAPI.getInstance().getWarpPlayer(uuid);
-                    if (warpPlayer != null && warpData.originalEvent.getPlayerWarp() != null) {
-                        warpData.originalEvent.getPlayerWarp().getWarpLocation()
-                                .teleportLocation(player, warpPlayer, warpData.originalEvent);
-                    } else {
-                        // Fallback to command if API fails (shouldn't happen normally)
+                    // Wrapped in try-catch because the stored warp reference may be stale
+                    // (e.g., warp deleted or modified during the countdown)
+                    boolean teleported = false;
+                    try {
+                        WPlayer warpPlayer = PlayerWarpsAPI.getInstance().getWarpPlayer(uuid);
+                        if (warpPlayer != null && warpData.originalEvent.getPlayerWarp() != null
+                                && warpData.originalEvent.getPlayerWarp().getWarpLocation() != null) {
+                            warpData.originalEvent.getPlayerWarp().getWarpLocation()
+                                    .teleportLocation(player, warpPlayer, warpData.originalEvent);
+                            teleported = true;
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().log(Level.WARNING,
+                                "PlayerWarps API teleport failed for " + player.getName() + ", falling back to command", e);
+                    }
+
+                    if (!teleported) {
+                        // Fallback to command if API fails (warp may have been deleted during countdown)
                         String warpCommand = plugin.getConfig().getString("warp-command", "pw");
                         player.performCommand(warpCommand + " " + warpData.warpName);
                     }
@@ -525,8 +531,7 @@ public class WarpCommandListener implements Listener {
                     plugin.getLogger().info("Teleported " + player.getName() + " to " + warpData.warpName);
                 }
             } catch (Exception e) {
-                plugin.getLogger().severe("Error in teleport task for " + player.getName() + ": " + e.getMessage());
-                e.printStackTrace();
+                plugin.getLogger().log(Level.SEVERE, "Error in teleport task for " + player.getName(), e);
                 cancelCountdown(player);
             }
         }, teleportDelay);
@@ -551,8 +556,6 @@ public class WarpCommandListener implements Listener {
         // Use a threshold to ignore tiny floating-point position changes that occur naturally
         Location from = event.getFrom();
         Location to = event.getTo();
-
-        if (to == null) return; // Safety check
 
         // Calculate distance moved
         double distanceSquared = from.distanceSquared(to);
@@ -597,6 +600,16 @@ public class WarpCommandListener implements Listener {
                     plugin.getLogger().info("Allowed bat mount for " + player.getName() + " (was blocked by another plugin)");
                 }
             }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerTeleport(PlayerTeleportEvent event) {
+        UUID uuid = event.getPlayer().getUniqueId();
+
+        // Only cancel countdown for external teleports during the waiting phase (not during our transition)
+        if (waitingPlayers.contains(uuid) && !transitioningPlayers.contains(uuid)) {
+            cancelCountdown(event.getPlayer());
         }
     }
 
@@ -648,7 +661,7 @@ public class WarpCommandListener implements Listener {
      * Handle countdown message (3, 2, 1)
      */
     private void handleCountdownMessage(Player player, String warpName, int secondsLeft) {
-        String titleText = plugin.getConfig().getString("countdown.title", "<#f9e59d>ᴡᴀʀᴘɪɴɢ ɪɴ <seconds>");
+        String titleText = plugin.getConfig().getString("countdown.title", "<#f9e59d>ᴡᴀʀᴘɪɴɢ ɪɴ %seconds%");
         String subtitleText = plugin.getConfig().getString("countdown.subtitle", "<white>ᴅᴏ ɴᴏᴛ ᴍᴏᴠᴇ");
 
         // Get timing from config (0-200 ticks reasonable range)
@@ -869,7 +882,7 @@ public class WarpCommandListener implements Listener {
      */
     public void cleanupOrphanedBats() {
         // Count and remove orphaned bats
-        AtomicInteger removed = new AtomicInteger(0);
+        int[] removed = {0};
         playerBats.entrySet().removeIf(entry -> {
             Bat bat = entry.getValue();
             if (bat == null || !bat.isValid() || bat.getPassengers().isEmpty()) {
@@ -877,14 +890,14 @@ public class WarpCommandListener implements Listener {
                 if (bat != null && bat.isValid()) {
                     bat.remove();
                 }
-                removed.incrementAndGet();
+                removed[0]++;
                 return true; // Remove from map
             }
             return false; // Keep in map
         });
 
-        if (removed.get() > 0 && plugin.getConfig().getBoolean("debug", false)) {
-            plugin.getLogger().info("Cleaned up " + removed.get() + " orphaned bat(s)");
+        if (removed[0] > 0 && plugin.getConfig().getBoolean("debug", false)) {
+            plugin.getLogger().info("Cleaned up " + removed[0] + " orphaned bat(s)");
         }
     }
 
@@ -910,7 +923,7 @@ public class WarpCommandListener implements Listener {
         // Clean up any remaining bats
         playerBats.values().forEach(bat -> {
             if (bat.isValid()) {
-                bat.getPassengers().forEach(Entity::eject);
+                bat.eject();
                 bat.remove();
             }
         });

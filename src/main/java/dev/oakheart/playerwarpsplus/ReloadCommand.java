@@ -10,6 +10,7 @@ import org.bukkit.command.TabCompleter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Level;
 
 /**
  * Command handler for the /playerwarpsplus reload command.
@@ -79,8 +80,7 @@ public class ReloadCommand implements CommandExecutor, TabCompleter {
                     .append(Component.text("✗", NamedTextColor.RED, TextDecoration.BOLD))
                     .append(Component.text(" Error reloading config: " + e.getMessage(), NamedTextColor.RED))
                     .build());
-            plugin.getLogger().severe("Error reloading config: " + e.getMessage());
-            e.printStackTrace();
+            plugin.getLogger().log(Level.SEVERE, "Error reloading config", e);
         }
 
         return true;

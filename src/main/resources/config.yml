@@ -94,7 +94,8 @@ countdown:
     type: "block.amethyst_block.break"
     volume: 1.0
 
-    # Pitch for each countdown second
+    # Pitch for each countdown second (add more entries if duration > 3)
+    # e.g. for duration: 5, add pitch-5 and pitch-4
     pitch-3: 1.0
     pitch-2: 0.9
     pitch-1: 0.8
